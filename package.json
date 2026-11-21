@@ -1,6 +1,6 @@
 {
   "name": "dsh-rotate-status-text",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Rotates the DSH chat running-status line through a configured list of phrases, by wrapping the locale translate method. Generic: phrases come entirely from bundle configuration.",
   "license": "MIT",

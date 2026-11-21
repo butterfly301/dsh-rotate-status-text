@@ -1,18 +1,18 @@
 # dsh-rotate-status-text
 
-A generic DSH web client plugin that rotates the chat running-status line through a configured list of phrases. It ships with **no phrases of its own** — every string comes from the bundle configuration that mounts it, so any theme can supply its own wording.
+一个通用的 DSH web 客户端插件，让聊天的运行状态行在一组配置的文案之间轮换。插件**自身不附带任何文案**——所有字符串都来自挂载它的 bundle 配置，因此任何主题都可以提供自己的措辞。
 
-## What it does
+## 作用
 
-The chat running-status row renders its copy through `chat.deepDiving` / `chat.deepDivingFor` (and `message.turnProcess.deepDivingFor`). The framework builds `t` with `ctx.locale.bind(ns)`, and that bound function resolves `this.translate(ns, key, params)` at call time. This plugin shadows the locale service's `translate` method, so it can replace exactly those keys with a configured phrase while passing every other key straight through.
+聊天的运行状态行通过 `chat.deepDiving` / `chat.deepDivingFor`（以及 `message.turnProcess.deepDivingFor`）渲染文案。框架用 `ctx.locale.bind(ns)` 构造 `t`，这个绑定函数在调用时解析 `this.translate(ns, key, params)`。本插件遮蔽（shadow）locale 服务的 `translate` 方法，从而把这些键替换成配置的文案，其余所有键原样透传。
 
-Phrases rotate on a wall-clock window: within one `intervalMs` window every re-render shows the same phrase, and the phrase advances at the next window. That avoids the flicker a per-call random pick would cause on a line that re-renders every second.
+文案按真实时间窗口轮换：在同一个 `intervalMs` 窗口内，每次重渲染都显示同一句，到下一个窗口才切换到下一句。这样避免了逐次随机挑选在每秒重渲染的行上造成的闪烁。
 
-The overriding `translate` is installed inside an effect and restored in its cleanup. Disabling the theme or removing the config row puts the original method back — no file writes, no persistent user settings, no leftovers.
+覆盖用的 `translate` 在 effect 内安装，并在其清理函数中还原。停用主题或移除配置行就会放回原方法——不写文件、不保存用户设置、不留残余。
 
-## Configuration
+## 配置
 
-Mount the plugin from a bundle patch and give its row a `config.pack`:
+从 bundle patch 挂载插件，并给它的配置行一个 `config.pack`：
 
 ```yaml
 - insert:
@@ -27,31 +27,31 @@ Mount the plugin from a bundle patch and give its row a `config.pack`:
             - 正在观测星象，校准航位…
 ```
 
-| Field | Type | Default | Meaning |
+| 字段 | 类型 | 默认值 | 含义 |
 |---|---|---|---|
-| `pack.phrases` | `string[]` | required | Candidate phrases, chosen in turn by time window |
-| `pack.intervalMs` | `number` | `8000` | Window length in ms; minimum 100 |
+| `pack.phrases` | `string[]` | 必填 | 候选文案，按时间窗口依次选中 |
+| `pack.intervalMs` | `number` | `8000` | 窗口时长（毫秒），最小 100 |
 
-A phrase may contain `{duration}`, which is replaced by the framework-supplied duration (e.g. `正在研判航路 {duration}`). A phrase without the placeholder is used verbatim.
+文案可以包含 `{duration}` 占位符，会被框架提供的时长替换（例如 `正在研判航路 {duration}`）；不含占位符的文案按原样使用。
 
-Setting `pack` to `false` (or omitting it) leaves the shipped DSH copy untouched.
+把 `pack` 设为 `false`（或省略）时，DSH 自带文案保持不变。
 
-`config.pack` is declared `volatile()`: the plugin owns no persistent user settings and never writes configuration back.
+`config.pack` 声明为 `volatile()`：插件不持有任何持久的用户设置，也从不把配置写回。
 
-## Design notes
+## 设计说明
 
-- **Generic core, theme-owned content.** The plugin contains no theme-specific wording. The example phrases above are only illustration; a real theme supplies its own list.
-- **Translate-layer override, not a dictionary.** A theme-supplied locale dictionary cannot reach the running-status component's own `t` binding. Overriding `translate` at the service level is what makes the copy actually render.
-- **Clean lifecycle.** The wrapper is installed in `ctx.effect` and restored on cleanup (or when `pack` changes), so switching themes or editing config never leaves a stale override behind.
+- **通用内核，内容归主题。** 插件不含任何主题专属措辞。上面的示例文案仅作演示；实际主题提供自己的列表。
+- **在 translate 层覆盖，而非词典。** 主题提供的 locale 词典触及不到运行状态组件自身的 `t` 绑定；只有在服务层覆盖 `translate`，才能让文案真正渲染出来。
+- **干净的生命周期。** 包装函数在 `ctx.effect` 中安装，并在清理时（或 `pack` 变化时）还原，因此切换主题或编辑配置都不会留下失效的覆盖。
 
-## Install
+## 安装
 
 ```powershell
 dsh plugin --profile desktop add dsh-rotate-status-text
 ```
 
-Or add `"dsh-rotate-status-text": "0.1.0"` to the profile's dependencies and include the row in a bundle patch as shown above.
+或者把 `"dsh-rotate-status-text": "0.1.0"` 加入 profile 的依赖，并按上面的方式在 bundle patch 中包含该配置行。
 
-## License
+## 许可
 
 MIT
