@@ -9,8 +9,10 @@ const schemastery = hostRoot
   : localRequire('@deepseek-ai/schemastery');
 const z = schemastery.default ?? schemastery;
 
+// `phrases` is keyed by language id; a plain string[] is still accepted as a
+// single unnamed list for backwards compatibility.
 const pack = z.object({
-  phrases: z.array(z.string()).required(),
+  phrases: z.union([z.array(z.string()), z.dict(z.array(z.string()))]).required(),
   intervalMs: z.number().min(100).default(8000),
 });
 

@@ -29,14 +29,41 @@ window.__ModuleLoader__.load({
     function pickIndex(length, intervalMs) {
       if (length <= 1) return 0;
       const bucket = Math.floor(Date.now() / intervalMs);
-      // Different intervals/buckets should not all start at index 0 together.
       return ((bucket % length) + length) % length;
+    }
+
+    const primary = (lang) => String(lang ?? '').split(/[-_]/)[0].toLowerCase();
+
+    /**
+     * Pick a value from a `{ [langId]: value }` map with no language hardcoded:
+     * exact id, then matching primary BCP-47 subtag, then the first entry.
+     */
+    function pickLocalized(map, active) {
+      if (!map || typeof map !== 'object') return undefined;
+      if (active && map[active] !== undefined) return map[active];
+      const want = primary(active);
+      if (want) {
+        for (const [id, value] of Object.entries(map)) {
+          if (primary(id) === want) return value;
+        }
+      }
+      return Object.values(map)[0];
+    }
+
+    /** Read the active language id from the locale service snapshot. */
+    function readActive(locale) {
+      try {
+        const snap = typeof locale.getSnapshot === 'function' ? locale.getSnapshot() : undefined;
+        return snap && (snap.active ?? snap.locale ?? snap.preference);
+      } catch {
+        return undefined;
+      }
     }
 
     /**
      * Shadow the locale service's translate method. Returns a restore function
      * that puts the original descriptor back — called from the effect cleanup
-     * so disabling/unloading the theme leaves no trace.
+     * so disabling/unloading leaves no trace.
      */
     function installOverride(locale, getPack) {
       if (!locale || typeof locale.translate !== 'function') return () => {};
@@ -49,9 +76,12 @@ window.__ModuleLoader__.load({
       const patched = function (ns, key, params) {
         if (isStatusKey(key)) {
           const pack = getPack();
-          if (pack && Array.isArray(pack.phrases) && pack.phrases.length) {
-            const phrase = pack.phrases[pickIndex(pack.phrases.length, pack.intervalMs)];
-            if (typeof phrase === 'string') return renderPhrase(phrase, params);
+          if (pack && pack.phrases) {
+            const phrases = pickLocalized(pack.phrases, readActive(locale));
+            if (Array.isArray(phrases) && phrases.length) {
+              const phrase = phrases[pickIndex(phrases.length, pack.intervalMs)];
+              if (typeof phrase === 'string') return renderPhrase(phrase, params);
+            }
           }
         }
         return original.apply(this === undefined ? locale : this, [ns, key, params]);
@@ -65,7 +95,6 @@ window.__ModuleLoader__.load({
           enumerable: own !== undefined && own.enumerable === true,
         });
       } catch (error) {
-        // A sealed service: shadow the prototype method instead.
         holder = Object.getPrototypeOf(locale);
         if (!holder || typeof holder.translate !== 'function') throw error;
         own = Object.getOwnPropertyDescriptor(holder, 'translate');
@@ -80,11 +109,20 @@ window.__ModuleLoader__.load({
       };
     }
 
+    /** Normalize both the legacy array and the new per-language dictionary. */
     function normalizePack(value) {
       if (!value || typeof value !== 'object') return undefined;
-      if (!Array.isArray(value.phrases)) return undefined;
-      const phrases = value.phrases.filter(p => typeof p === 'string' && p.length > 0);
-      if (!phrases.length) return undefined;
+      const raw = value.phrases;
+      let phrases;
+      if (Array.isArray(raw)) {
+        phrases = { '': raw.filter(p => typeof p === 'string' && p.length > 0) };
+      } else if (raw && typeof raw === 'object') {
+        phrases = {};
+        for (const [id, list] of Object.entries(raw)) {
+          if (Array.isArray(list)) phrases[id] = list.filter(p => typeof p === 'string' && p.length > 0);
+        }
+      }
+      if (!phrases || !Object.values(phrases).some(list => list.length)) return undefined;
       const intervalMs = typeof value.intervalMs === 'number' && value.intervalMs >= 100
         ? value.intervalMs
         : 8000;
@@ -113,7 +151,7 @@ window.__ModuleLoader__.load({
               if (previous) previous();
               currentPack = pack;
               // getPack reads the live ref, so translate always sees the newest
-              // config without reinstalling the wrapper on every edit.
+              // config and active language without reinstalling the wrapper.
               restoreOverride = installOverride(ctx.locale, () => currentPack);
             } catch (error) {
               console.error('[dsh-rotate-status-text] failed to install override:', error);
