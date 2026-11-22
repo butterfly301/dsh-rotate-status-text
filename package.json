@@ -1,6 +1,6 @@
 {
   "name": "dsh-rotate-status-text",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "description": "Rotates the DSH chat running-status line through configured per-language phrase lists by wrapping the locale translate method. Language ids and phrases come entirely from configuration.",
   "license": "MIT",
@@ -8,17 +8,35 @@
     "type": "git",
     "url": "git+https://github.com/butterfly301/dsh-rotate-status-text.git"
   },
+  "homepage": "https://github.com/butterfly301/dsh-rotate-status-text#readme",
+  "bugs": {
+    "url": "https://github.com/butterfly301/dsh-rotate-status-text/issues"
+  },
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "status",
+    "i18n"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "dsh": ">=0.2.2-rc.5 <0.3.0"
   },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
   "files": [
     "index.js",
     "client.js",
+    "locale",
+    "icon.svg",
     "README.md",
     "LICENSE"
   ],

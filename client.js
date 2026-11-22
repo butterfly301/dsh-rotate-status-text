@@ -98,7 +98,16 @@ window.__ModuleLoader__.load({
         holder = Object.getPrototypeOf(locale);
         if (!holder || typeof holder.translate !== 'function') throw error;
         own = Object.getOwnPropertyDescriptor(holder, 'translate');
-        holder.translate = patched;
+        try {
+          Object.defineProperty(holder, 'translate', {
+            value: patched,
+            writable: true,
+            configurable: true,
+            enumerable: own !== undefined && own.enumerable === true,
+          });
+        } catch {
+          holder.translate = patched;
+        }
       }
 
       return function restore() {
@@ -144,17 +153,24 @@ window.__ModuleLoader__.load({
             const revision = JSON.stringify(pack);
             if (revision === JSON.stringify(currentPack)) return;
 
-            const previous = restoreOverride;
-            restoreOverride = undefined;
-            currentPack = undefined;
-            try {
-              if (previous) previous();
-              currentPack = pack;
-              // getPack reads the live ref, so translate always sees the newest
-              // config and active language without reinstalling the wrapper.
-              restoreOverride = installOverride(ctx.locale, () => currentPack);
-            } catch (error) {
-              console.error('[dsh-rotate-status-text] failed to install override:', error);
+            currentPack = pack;
+            if (pack && !restoreOverride) {
+              try {
+                // getPack reads the live ref, so translate always sees the newest
+                // config and active language without reinstalling the wrapper.
+                restoreOverride = installOverride(ctx.locale, () => currentPack);
+              } catch (error) {
+                currentPack = undefined;
+                console.error('[dsh-rotate-status-text] failed to install override:', error);
+              }
+            } else if (!pack && restoreOverride) {
+              const previous = restoreOverride;
+              restoreOverride = undefined;
+              try {
+                previous();
+              } catch (error) {
+                console.error('[dsh-rotate-status-text] failed to restore override:', error);
+              }
             }
           };
 
