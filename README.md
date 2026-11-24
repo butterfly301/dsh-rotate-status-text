@@ -6,7 +6,9 @@
 
 聊天的运行状态行通过 `chat.deepDiving` / `chat.deepDivingFor`（以及 `message.turnProcess.deepDivingFor`）渲染文案。框架用 `ctx.locale.bind(ns)` 构造 `t`，这个绑定函数在调用时解析 `this.translate(ns, key, params)`。本插件遮蔽（shadow） locale 服务的 `translate` 方法，从而把这些键替换成配置的文案，其余所有键原样透传。
 
-`phrases` 按语言 ID 索引。渲染时用当前 DSH active 语言选取对应词表：先精确匹配完整 ID，再匹配主语言子标签（如 `en-US` → `en`），最后取第一组。切换语言无需重启。
+`phrases` 按语言 ID 索引。渲染时用当前 DSH active 语言选取对应词表：先精确匹配完整 ID，再匹配主语言子标签（如 `en-US` → `en`），接着回退到英语（`en` / `en-*`），最后才取第一组。切换语言无需重启。
+
+除在 `cordis.patch.yml` 中配置外，插件也在 DSH 设置侧栏提供「状态短句轮换 / Status phrase rotation」独立设置页，可在线增删语种、编辑三段与摇晃短句、调整间隔与阈值，以及配置三段状态颜色。
 
 文案按真实时间窗口轮换：在同一个 `intervalMs` 窗口内，每次重渲染都显示同一句，到下一个窗口才切换到下一句，避免在每秒重渲染的行上造成闪烁。
 

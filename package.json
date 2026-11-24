@@ -1,6 +1,6 @@
 {
   "name": "dsh-rotate-status-text",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "Rotates the DSH chat running-status line through configured per-language phrase lists by wrapping the locale translate method. Language ids and phrases come entirely from configuration.",
   "license": "MIT",
@@ -23,6 +23,7 @@
     "access": "public"
   },
   "engines": {
+    "node": ">=20",
     "dsh": ">=0.2.2-rc.5 <0.3.0"
   },
   "exports": {

@@ -420,3 +420,102 @@ test('stageColors applies default and theme override palettes, clears on event o
 
   harness.dispose();
 });
+
+test('out-of-order translate wrapper disposal leaves outer wrapper intact and falls back to English', () => {
+  let loadedModule = null;
+  const listeners = new Map();
+  const windowMock = {
+    addEventListener(type, fn) {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type).add(fn);
+    },
+    removeEventListener(type, fn) {
+      listeners.get(type)?.delete(fn);
+    },
+  };
+  windowMock.__ModuleLoader__ = { load(m) { loadedModule = m; } };
+
+  const sandbox = {
+    window: windowMock,
+    Date,
+    CustomEvent: class {},
+    console,
+    setInterval: () => 1,
+    clearInterval: () => {},
+  };
+  vm.runInNewContext(CLIENT_CODE, sandbox);
+
+  const locale = {
+    getSnapshot: () => ({ active: 'ko' }),
+    translate: (_ns, key) => `NATIVE:${key}`,
+  };
+  const registered = [];
+  let slotDisposed = 0;
+  let scopeEffectCalls = 0;
+  const fakeReact = {
+    Fragment: Symbol('Fragment'),
+    createElement: (...args) => ({ args }),
+    useState: (v) => [typeof v === 'function' ? v() : v, () => {}],
+    useEffect: () => {},
+    useRef: (v) => ({ current: v }),
+  };
+  const ctx = {
+    locale,
+    configForms: {
+      get: () => ({
+        getSnapshot: () => ({
+          status: 'ready',
+          value: {
+            pack: {
+              intervalMs: 10_000,
+              phrases: {
+                'de-pirate': { start: ['DE'], progress: ['DE'], long: ['DE'] },
+                'en-pirate': { start: ['EN'], progress: ['EN'], long: ['EN'] },
+              },
+            },
+          },
+        }),
+        subscribe: () => () => {},
+      }),
+    },
+    slots: {
+      inject: (_name, fn) => fn(),
+      register: (meta, render) => {
+        registered.push({ meta, render });
+        return () => { slotDisposed += 1; };
+      },
+    },
+    remote: { settings: { mutate: async () => ({ ok: true, value: {} }) } },
+    effect: (fn) => fn(),
+    inject: (deps, fn) => (typeof fn === 'function'
+      ? fn({
+        ...ctx,
+        effect: (ef) => {
+          if (Array.isArray(deps) && deps.includes('slots')) scopeEffectCalls += 1;
+          return ef();
+        },
+      })
+      : () => {}),
+  };
+
+  const cleanup = loadedModule.factory((id) => (id === 'react' ? fakeReact : null)).apply(ctx);
+  assert.equal(registered.length, 1);
+  assert.equal(scopeEffectCalls, 1);
+  assert.equal(registered[0].meta.id, 'dsh-rotate-status-text');
+  assert.equal(locale.translate('chat', 'chat.deepDiving'), 'EN');
+
+  // Simulate another plugin wrapping locale.translate after dsh-rotate-status-text
+  const innerTranslate = locale.translate;
+  const outerTranslate = function (ns, key, params) {
+    const res = innerTranslate.call(this, ns, key, params);
+    return key === 'hero.headline' ? `OUTER:${res}` : res;
+  };
+  locale.translate = outerTranslate;
+
+  // Disposing dsh-rotate-status-text out-of-order must NOT delete outerTranslate and must pass through NATIVE text
+  cleanup();
+  assert.equal(slotDisposed, 1);
+  assert.equal(locale.translate, outerTranslate);
+  assert.equal(locale.translate('conversation', 'hero.headline'), 'OUTER:NATIVE:hero.headline');
+  assert.equal(locale.translate('chat', 'chat.deepDiving'), 'NATIVE:chat.deepDiving');
+});

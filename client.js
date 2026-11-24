@@ -1,6 +1,9 @@
 window.__ModuleLoader__.load({
   id: 'dsh-rotate-status-text',
-  factory() {
+  factory(require) {
+    const React = typeof require === 'function'
+      ? (() => { try { return require('react'); } catch { return null; } })()
+      : null;
     const NS = 'dsh-rotate-status-text';
     const TURN_STATE_ROUTE = '/rotate-status-text/turn-state';
     const OVERRIDE_EVENT = 'dsh:status-text:override';
@@ -56,7 +59,8 @@ window.__ModuleLoader__.load({
 
     /**
      * Pick a value from a `{ [langId]: value }` map with no language hardcoded:
-     * exact id, then matching primary BCP-47 subtag, then the first entry.
+     * exact id, then matching primary BCP-47 subtag, then English (`en` / `en-*`),
+     * then the first entry.
      */
     function pickLocalized(map, active) {
       if (!map || typeof map !== 'object') return undefined;
@@ -66,6 +70,10 @@ window.__ModuleLoader__.load({
         for (const [id, value] of Object.entries(map)) {
           if (primary(id) === want) return value;
         }
+      }
+      if (map.en !== undefined) return map.en;
+      for (const [id, value] of Object.entries(map)) {
+        if (primary(id) === 'en') return value;
       }
       return Object.values(map)[0];
     }
@@ -472,10 +480,10 @@ window.__ModuleLoader__.load({
       let holder = locale;
       let own = Object.getOwnPropertyDescriptor(holder, 'translate');
       const original = locale.translate;
-      const installed = { value: true };
+      let active = true;
 
       const patched = function (ns, key, params) {
-        if (isStatusKey(key)) {
+        if (active && isStatusKey(key)) {
           const pack = getPack();
           if (pack && pack.phrases) {
             const entry = tracker.selectEntry(pack, readActive(locale));
@@ -512,10 +520,12 @@ window.__ModuleLoader__.load({
       }
 
       return function restore() {
-        if (!installed.value) return;
-        installed.value = false;
-        if (own === undefined) delete holder.translate;
-        else Object.defineProperty(holder, 'translate', own);
+        if (!active) return;
+        active = false;
+        if (holder.translate === patched) {
+          if (own === undefined) delete holder.translate;
+          else Object.defineProperty(holder, 'translate', own);
+        }
       };
     }
 
@@ -530,10 +540,442 @@ window.__ModuleLoader__.load({
       }
     }
 
+    const ROTATE_COPY = {
+      zh: {
+        nav: '状态短句轮换',
+        title: '状态短句轮换',
+        hint: '按等待时长分段轮换运行状态文案；修改后点保存立即生效。',
+        enabled: '启用状态短句轮换',
+        interval: '轮换间隔（毫秒）',
+        t1: '起步切推进（秒）',
+        t2: '推进切漫长（秒）',
+        invalidThresholds: '分段秒数必须是正整数，且第二边界大于第一边界。',
+        lang: '编辑语种',
+        addLangPlaceholder: '新增语言 ID（如 ja）',
+        addLang: '添加语种',
+        start: '起步阶段（每行一句）',
+        progress: '推进阶段（每行一句）',
+        long: '漫长阶段（每行一句）',
+        shake: '窗口摇晃吐槽（每行一句）',
+        stageColors: '分段状态颜色',
+        lightColors: '浅色主题颜色',
+        darkColors: '深色主题颜色',
+        save: '保存',
+        saving: '保存中…',
+        saved: '已保存',
+        loading: '加载中…',
+      },
+      en: {
+        nav: 'Status phrase rotation',
+        title: 'Status phrase rotation',
+        hint: 'Rotates running-status phrases by turn wait phase. Click Save to apply live.',
+        enabled: 'Enable status phrase rotation',
+        interval: 'Rotation interval (ms)',
+        t1: 'Start -> Progress (sec)',
+        t2: 'Progress -> Long (sec)',
+        invalidThresholds: 'Thresholds must be positive integers with the second greater than the first.',
+        lang: 'Editing language',
+        addLangPlaceholder: 'Add lang ID (e.g. ja)',
+        addLang: 'Add language',
+        start: 'Opening phase (one per line)',
+        progress: 'Cruising phase (one per line)',
+        long: 'Long-haul phase (one per line)',
+        shake: 'Window-shake quips (one per line)',
+        stageColors: 'Stage text colors',
+        lightColors: 'Light theme colors',
+        darkColors: 'Dark theme colors',
+        save: 'Save',
+        saving: 'Saving…',
+        saved: 'Saved',
+        loading: 'Loading…',
+      },
+    };
+
+    const ROTATE_CSS = `
+.rs-panel { display: flex; flex-direction: column; gap: 12px; color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 22px; }
+.rs-card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; background: var(--dsw-alias-bg-layer-1); border: .5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); }
+.rs-title { font-weight: 600; }
+.rs-hint { color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
+.rs-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.rs-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 640px) { .rs-grid { grid-template-columns: 1fr; } }
+.rs-field { display: flex; flex-direction: column; gap: 4px; }
+.rs-label { color: var(--dsw-alias-label-secondary); font-size: 12px; }
+.rs-panel input[type=text], .rs-panel input[type=number], .rs-panel select, .rs-panel textarea {
+  font: inherit; font-size: 13px; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md); padding: 6px 8px; box-sizing: border-box; width: 100%;
+}
+.rs-panel textarea { min-height: 68px; resize: vertical; line-height: 20px; }
+.rs-inline { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.rs-inline > input, .rs-inline > select { width: auto; flex: 1 1 160px; }
+.rs-btn {
+  padding: 6px 12px; border: 1px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); font: inherit; font-size: 13px; cursor: pointer;
+}
+.rs-save {
+  align-self: flex-start; padding: 7px 18px; border: none; border-radius: var(--dsw-radius-md);
+  background: var(--dsw-alias-brand-primary); color: var(--dsw-alias-button-primary-text, #fff); font: inherit; font-weight: 600; cursor: pointer;
+}
+.rs-save:disabled { opacity: .6; cursor: not-allowed; }
+.rs-error { color: var(--dsw-alias-state-error-primary); font-size: 13px; }
+`;
+
+    function parseLines(raw) {
+      return String(raw ?? '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    }
+
+    function createRotateSettingsComponent(R) {
+      const { useState, useEffect, useRef } = R;
+      const h = R.createElement;
+
+      function copyOf(locale) {
+        const active = readActive(locale) || '';
+        return primary(active) === 'zh' ? ROTATE_COPY.zh : ROTATE_COPY.en;
+      }
+
+      function toEditablePack(rawPack) {
+        if (!rawPack || typeof rawPack !== 'object') return null;
+        const norm = normalizePack(rawPack);
+        const phrases = {};
+        if (rawPack.phrases && typeof rawPack.phrases === 'object' && !Array.isArray(rawPack.phrases)) {
+          for (const [id, entry] of Object.entries(rawPack.phrases)) {
+            if (Array.isArray(entry)) {
+              phrases[id] = { start: [], progress: filterStrings(entry), long: [] };
+            } else if (entry && typeof entry === 'object') {
+              phrases[id] = {
+                start: filterStrings(entry.start),
+                progress: filterStrings(entry.progress),
+                long: filterStrings(entry.long),
+              };
+            }
+          }
+        }
+        return {
+          intervalMs: norm ? norm.intervalMs : (typeof rawPack.intervalMs === 'number' ? rawPack.intervalMs : 8000),
+          thresholds: norm ? [...norm.thresholds] : [...DEFAULT_THRESHOLDS],
+          phrases,
+          shakePhrases: norm ? { ...norm.shakePhrases } : {},
+          stageColors: rawPack.stageColors === false ? false : normalizeStageColors(rawPack.stageColors),
+        };
+      }
+
+      function defaultEmptyPack() {
+        return {
+          intervalMs: 8000,
+          thresholds: [30, 60],
+          phrases: { zh: { start: [], progress: [], long: [] }, en: { start: [], progress: [], long: [] } },
+          shakePhrases: {},
+          stageColors: normalizeStageColors({}),
+        };
+      }
+
+      return function RotateSettingsPanel({ form, locale, savePack }) {
+        const [snap, setSnap] = useState(() => form.getSnapshot());
+        const [draftPack, setDraftPack] = useState(null);
+        const [hasDraft, setHasDraft] = useState(false);
+        const [selectedLang, setSelectedLang] = useState('');
+        const [newLang, setNewLang] = useState('');
+        const [textDrafts, setTextDrafts] = useState({});
+        const [thresholdDrafts, setThresholdDrafts] = useState(null);
+        const [intervalDraft, setIntervalDraft] = useState(null);
+        const [saving, setSaving] = useState(false);
+        const [savedFlag, setSavedFlag] = useState(false);
+        const [error, setError] = useState('');
+        const [, setLangTick] = useState(0);
+        const dirtyRef = useRef(false);
+        const cacheRef = useRef(null);
+        const copy = copyOf(locale);
+
+        useEffect(() => {
+          const unsubForm = form.subscribe(() => {
+            const next = form.getSnapshot();
+            setSnap(next);
+            if (!dirtyRef.current && next.status === 'ready') {
+              setDraftPack(null);
+              setHasDraft(false);
+              setTextDrafts({});
+              setThresholdDrafts(null);
+              setIntervalDraft(null);
+            }
+          });
+          const unsubLocale = typeof locale?.subscribe === 'function'
+            ? locale.subscribe(() => setLangTick((v) => v + 1))
+            : undefined;
+          return () => {
+            try { unsubForm?.(); } catch {}
+            try { unsubLocale?.(); } catch {}
+          };
+        }, [form, locale]);
+
+        if (!snap || snap.status === 'loading') {
+          return h('div', { className: 'rs-panel' }, h('div', { className: 'rs-hint' }, copy.loading));
+        }
+
+        const currentPack = hasDraft ? draftPack : toEditablePack(snap.value?.pack);
+        const basePack = toEditablePack(snap.base?.pack);
+        const enabled = Boolean(currentPack);
+
+        const langKeys = currentPack
+          ? [...new Set([...Object.keys(currentPack.phrases || {}), ...Object.keys(currentPack.shakePhrases || {}), ...Object.keys(textDrafts)])]
+          : [];
+        const activeLang = langKeys.includes(selectedLang)
+          ? selectedLang
+          : (langKeys.find((id) => primary(id) === primary(readActive(locale))) || langKeys[0] || '');
+
+        const markDirty = (nextPack) => {
+          dirtyRef.current = true;
+          setHasDraft(true);
+          setDraftPack(nextPack);
+          setSavedFlag(false);
+        };
+
+        const toggleEnabled = (on) => {
+          if (!on) {
+            if (currentPack) cacheRef.current = currentPack;
+            markDirty(false);
+            return;
+          }
+          markDirty(cacheRef.current || basePack || defaultEmptyPack());
+        };
+
+        const activeEntry = (currentPack && activeLang && currentPack.phrases?.[activeLang]) || { start: [], progress: [], long: [] };
+        const activeShake = (currentPack && activeLang && currentPack.shakePhrases?.[activeLang]) || [];
+        const activeDraft = (activeLang && textDrafts[activeLang]) || {};
+
+        const textOf = (field, fallbackArr) => (
+          Object.prototype.hasOwnProperty.call(activeDraft, field)
+            ? activeDraft[field]
+            : (Array.isArray(fallbackArr) ? fallbackArr.join('\n') : '')
+        );
+
+        const editText = (field, value) => {
+          if (!currentPack || !activeLang) return;
+          dirtyRef.current = true;
+          setHasDraft(true);
+          if (!draftPack) setDraftPack(currentPack);
+          setSavedFlag(false);
+          setTextDrafts((prev) => ({
+            ...prev,
+            [activeLang]: { ...(prev[activeLang] || {}), [field]: String(value) },
+          }));
+        };
+
+        const addLanguage = () => {
+          const id = newLang.trim();
+          if (!id || !currentPack) return;
+          if (!currentPack.phrases[id]) {
+            markDirty({
+              ...currentPack,
+              phrases: { ...currentPack.phrases, [id]: { start: [], progress: [], long: [] } },
+            });
+          }
+          setSelectedLang(id);
+          setNewLang('');
+        };
+
+        const commit = async () => {
+          setSaving(true);
+          setError('');
+          try {
+            let payload = false;
+            if (currentPack) {
+              const phrases = { ...currentPack.phrases };
+              const shakePhrases = { ...currentPack.shakePhrases };
+              for (const [id, d] of Object.entries(textDrafts)) {
+                const prev = phrases[id] || { start: [], progress: [], long: [] };
+                phrases[id] = {
+                  start: Object.prototype.hasOwnProperty.call(d, 'start') ? parseLines(d.start) : prev.start,
+                  progress: Object.prototype.hasOwnProperty.call(d, 'progress') ? parseLines(d.progress) : prev.progress,
+                  long: Object.prototype.hasOwnProperty.call(d, 'long') ? parseLines(d.long) : prev.long,
+                };
+                if (Object.prototype.hasOwnProperty.call(d, 'shake')) {
+                  const list = parseLines(d.shake);
+                  if (list.length) shakePhrases[id] = list;
+                  else delete shakePhrases[id];
+                }
+              }
+              const rawT = thresholdDrafts || currentPack.thresholds;
+              const t1 = Number(String(rawT[0]).trim());
+              const t2 = Number(String(rawT[1]).trim());
+              if (!Number.isInteger(t1) || !Number.isInteger(t2) || t1 <= 0 || t2 <= t1) {
+                throw new Error(copy.invalidThresholds);
+              }
+              const rawInt = intervalDraft !== null ? Number(String(intervalDraft).trim()) : currentPack.intervalMs;
+              const intervalMs = Number.isFinite(rawInt) && rawInt >= 100 ? Math.round(rawInt) : 8000;
+              payload = {
+                intervalMs,
+                thresholds: [t1, t2],
+                phrases,
+                shakePhrases,
+                stageColors: currentPack.stageColors,
+              };
+            }
+            await savePack(payload, snap.revision);
+            dirtyRef.current = false;
+            setHasDraft(false);
+            setDraftPack(null);
+            setTextDrafts({});
+            setThresholdDrafts(null);
+            setIntervalDraft(null);
+            setSavedFlag(true);
+          } catch (err) {
+            setError(err?.message || String(err));
+          } finally {
+            setSaving(false);
+          }
+        };
+
+        const intervalVal = intervalDraft !== null ? intervalDraft : String(currentPack?.intervalMs ?? 8000);
+        const tVals = thresholdDrafts || [String(currentPack?.thresholds?.[0] ?? 30), String(currentPack?.thresholds?.[1] ?? 60)];
+        const colorsOn = Boolean(currentPack && currentPack.stageColors && typeof currentPack.stageColors === 'object');
+
+        return h('div', { className: 'rs-panel' },
+          error ? h('div', { className: 'rs-error' }, error) : null,
+          h('div', { className: 'rs-card' },
+            h('div', { className: 'rs-title' }, copy.title),
+            h('div', { className: 'rs-hint' }, copy.hint),
+            h('div', { className: 'rs-row' },
+              h('span', null, copy.enabled),
+              h('input', { type: 'checkbox', checked: enabled, 'aria-label': copy.enabled, onChange: (e) => toggleEnabled(e.target.checked) }))),
+          currentPack ? h('div', { className: 'rs-card' },
+            h('div', { className: 'rs-grid' },
+              h('div', { className: 'rs-field' },
+                h('span', { className: 'rs-label' }, copy.interval),
+                h('input', {
+                  type: 'number', min: 100, step: 100, value: intervalVal,
+                  onChange: (e) => {
+                    dirtyRef.current = true; setHasDraft(true); setSavedFlag(false);
+                    if (!draftPack) setDraftPack(currentPack);
+                    setIntervalDraft(e.target.value);
+                  },
+                })),
+              h('div', { className: 'rs-field' },
+                h('span', { className: 'rs-label' }, copy.t1),
+                h('input', {
+                  type: 'number', min: 1, step: 1, value: tVals[0],
+                  onChange: (e) => {
+                    dirtyRef.current = true; setHasDraft(true); setSavedFlag(false);
+                    if (!draftPack) setDraftPack(currentPack);
+                    setThresholdDrafts([e.target.value, tVals[1]]);
+                  },
+                })),
+              h('div', { className: 'rs-field' },
+                h('span', { className: 'rs-label' }, copy.t2),
+                h('input', {
+                  type: 'number', min: 2, step: 1, value: tVals[1],
+                  onChange: (e) => {
+                    dirtyRef.current = true; setHasDraft(true); setSavedFlag(false);
+                    if (!draftPack) setDraftPack(currentPack);
+                    setThresholdDrafts([tVals[0], e.target.value]);
+                  },
+                }))),
+            h('div', { className: 'rs-inline' },
+              h('span', { className: 'rs-label' }, copy.lang),
+              h('select', { value: activeLang, onChange: (e) => setSelectedLang(e.target.value) },
+                langKeys.map((id) => h('option', { key: id, value: id }, id))),
+              h('input', {
+                type: 'text', placeholder: copy.addLangPlaceholder, value: newLang,
+                onChange: (e) => setNewLang(e.target.value),
+              }),
+              h('button', { type: 'button', className: 'rs-btn', onClick: addLanguage }, copy.addLang)),
+            activeLang ? h(R.Fragment, null,
+              h('div', { className: 'rs-field' },
+                h('span', { className: 'rs-label' }, copy.start),
+                h('textarea', { value: textOf('start', activeEntry.start), onChange: (e) => editText('start', e.target.value) })),
+              h('div', { className: 'rs-field' },
+                h('span', { className: 'rs-label' }, copy.progress),
+                h('textarea', { value: textOf('progress', activeEntry.progress), onChange: (e) => editText('progress', e.target.value) })),
+              h('div', { className: 'rs-field' },
+                h('span', { className: 'rs-label' }, copy.long),
+                h('textarea', { value: textOf('long', activeEntry.long), onChange: (e) => editText('long', e.target.value) })),
+              h('div', { className: 'rs-field' },
+                h('span', { className: 'rs-label' }, copy.shake),
+                h('textarea', { value: textOf('shake', activeShake), onChange: (e) => editText('shake', e.target.value) }))) : null,
+            h('div', { className: 'rs-row' },
+              h('span', null, copy.stageColors),
+              h('input', {
+                type: 'checkbox',
+                checked: colorsOn,
+                'aria-label': copy.stageColors,
+                onChange: (e) => markDirty({ ...currentPack, stageColors: e.target.checked ? normalizeStageColors({}) : false }),
+              })),
+            colorsOn ? h('div', { className: 'rs-grid' },
+              ['start', 'progress', 'long'].map((seg) => h('div', { className: 'rs-field', key: seg },
+                h('span', { className: 'rs-label' }, `${copy.lightColors} · ${seg}`),
+                h('input', {
+                  type: 'text',
+                  value: currentPack.stageColors.light[seg] || '',
+                  onChange: (e) => markDirty({
+                    ...currentPack,
+                    stageColors: {
+                      ...currentPack.stageColors,
+                      light: { ...currentPack.stageColors.light, [seg]: e.target.value },
+                    },
+                  }),
+                }))),
+              ['start', 'progress', 'long'].map((seg) => h('div', { className: 'rs-field', key: `dark-${seg}` },
+                h('span', { className: 'rs-label' }, `${copy.darkColors} · ${seg}`),
+                h('input', {
+                  type: 'text',
+                  value: currentPack.stageColors.dark[seg] || '',
+                  onChange: (e) => markDirty({
+                    ...currentPack,
+                    stageColors: {
+                      ...currentPack.stageColors,
+                      dark: { ...currentPack.stageColors.dark, [seg]: e.target.value },
+                    },
+                  }),
+                })))) : null) : null,
+          h('button', {
+            type: 'button', className: 'rs-save', disabled: saving, onClick: commit,
+          }, saving ? copy.saving : (savedFlag && !hasDraft ? copy.saved : copy.save)));
+      };
+    }
+
     return {
       inject: ['locale', 'configForms'],
       apply(ctx) {
-        return ctx.effect(() => {
+        let stopSettingsUi;
+        if (React && typeof ctx.inject === 'function') {
+          const Panel = createRotateSettingsComponent(React);
+          stopSettingsUi = ctx.inject(['slots', 'remote', 'remote.settings'], (scope) => {
+            const mount = () => {
+              const form = ctx.configForms.get(NS);
+              const getLabel = () => (primary(readActive(ctx.locale)) === 'zh' ? ROTATE_COPY.zh.nav : ROTATE_COPY.en.nav);
+              const savePack = async (packValue, revision) => {
+                const settingsRemote = scope.remote?.settings;
+                if (!settingsRemote) throw new Error('settingsRemoteUnavailable');
+                const res = await settingsRemote.mutate(NS, [{ op: 'set', path: ['pack'], value: packValue }], revision);
+                if (res.ok) {
+                  ctx.configForms.describe?.().acceptView?.(res.value);
+                } else {
+                  await ctx.configForms.describe?.().load?.();
+                  throw new Error(res.error?.message || res.error?.code || 'persistFailed');
+                }
+              };
+              const regStop = scope.slots.inject('settings.section', () => scope.slots.register(
+                { name: 'settings.section', id: NS, order: 90, label: getLabel },
+                () => React.createElement(Panel, { form, locale: ctx.locale, savePack }),
+              ));
+              let styleEl = null;
+              if (typeof document !== 'undefined' && document.head) {
+                styleEl = document.createElement('style');
+                styleEl.setAttribute('data-plugin', NS);
+                styleEl.textContent = ROTATE_CSS;
+                document.head.appendChild(styleEl);
+              }
+              return () => {
+                try { regStop?.(); } catch {}
+                try { styleEl?.remove(); } catch {}
+              };
+            };
+            return typeof scope?.effect === 'function'
+              ? scope.effect(mount, 'dsh-rotate-status-text: settings ui')
+              : mount();
+          });
+        }
+
+        const stopRotation = ctx.effect(() => {
           const form = ctx.configForms.get(NS);
           const tracker = createSessionStateTracker(ctx);
           tracker.schedulePoll();
@@ -621,6 +1063,11 @@ window.__ModuleLoader__.load({
             }
           };
         }, 'dsh-rotate-status-text: status text rotation');
+
+        return () => {
+          try { stopSettingsUi?.(); } catch {}
+          try { stopRotation?.(); } catch {}
+        };
       },
     };
   },
