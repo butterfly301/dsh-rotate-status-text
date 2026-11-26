@@ -2,6 +2,8 @@
 
 一个通用的 DSH web 客户端插件，让聊天的运行状态行在一组配置的文案之间轮换。插件**自身不附带任何文案**——所有字符串都来自配置，语言 ID 由配置决定，数量不限。
 
+此包是 [`dsh-pirate-mode`](https://github.com/butterfly301/dsh-pirate-mode) 的组件，也可以单独安装使用。
+
 ## 作用
 
 聊天的运行状态行通过 `chat.deepDiving` / `chat.deepDivingFor`（以及 `message.turnProcess.deepDivingFor`）渲染文案。框架用 `ctx.locale.bind(ns)` 构造 `t`，这个绑定函数在调用时解析 `this.translate(ns, key, params)`。本插件遮蔽（shadow） locale 服务的 `translate` 方法，从而把这些键替换成配置的文案，其余所有键原样透传。
