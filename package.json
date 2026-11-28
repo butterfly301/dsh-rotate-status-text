@@ -1,6 +1,6 @@
 {
   "name": "dsh-rotate-status-text",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "type": "module",
   "description": "Rotates the DSH chat running-status line through configured per-language phrase lists by wrapping the locale translate method. Language ids and phrases come entirely from configuration.",
   "license": "MIT",
@@ -37,6 +37,7 @@
     "test": "node --test \"test/*.test.js\""
   },
   "files": [
+    "cordis.patch.yml",
     "index.js",
     "client.js",
     "host",
@@ -54,6 +55,9 @@
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-api-session-controller"
       ]
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
     }
   }
 }

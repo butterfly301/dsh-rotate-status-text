@@ -18,6 +18,20 @@ function eventAtOf(session, seq) {
   return undefined;
 }
 
+export function applyTurnEvent(state, event) {
+  if (!state || !event) return state;
+  if (event.type === 'turn/start') {
+    state.turnOpen = true;
+    state.turnStartAt = typeof event.time === 'number' && Number.isFinite(event.time)
+      ? event.time
+      : Date.now();
+  } else if (event.type === 'turn/end') {
+    state.turnOpen = false;
+    state.turnStartAt = null;
+  }
+  return state;
+}
+
 export function foldTurnState(state, session) {
   const inherited = countOf(session?.inheritedEventCount);
   const end = countOf(session?.seq);
@@ -30,20 +44,27 @@ export function foldTurnState(state, session) {
     };
   }
   for (let seq = state.foldedThrough + 1; seq < end; seq += 1) {
-    const event = eventAtOf(session, seq);
-    if (!event) continue;
-    if (event.type === 'turn/start') {
-      state.turnOpen = true;
-      state.turnStartAt = typeof event.time === 'number' && Number.isFinite(event.time)
-        ? event.time
-        : Date.now();
-    } else if (event.type === 'turn/end') {
-      state.turnOpen = false;
-      state.turnStartAt = null;
-    }
+    applyTurnEvent(state, eventAtOf(session, seq));
     state.foldedThrough = seq;
   }
   return state;
+}
+
+function payload(sessionId, state) {
+  return {
+    ok: true,
+    sessionId,
+    turnOpen: state?.turnOpen === true,
+    turnStartAt: state?.turnOpen ? state.turnStartAt : null,
+  };
+}
+
+function remember(cache, id, state) {
+  cache.set(id, state);
+  if (cache.size > MAX_CACHE_ENTRIES) {
+    const oldest = cache.keys().next().value;
+    cache.delete(oldest);
+  }
 }
 
 export async function readSessionTurnState(ctx, cache, sessionId) {
@@ -51,21 +72,14 @@ export async function readSessionTurnState(ctx, cache, sessionId) {
     return { ok: true, sessionId: null, turnOpen: false, turnStartAt: null };
   }
   const id = sessionId.trim();
-  let state = cache.get(id);
+  const known = cache.get(id);
+  if (known) return payload(id, known);
+
   const live = readService(ctx, 'sessions')?.get?.(id);
   if (live) {
-    state = foldTurnState(state, live);
-    cache.set(id, state);
-    if (cache.size > MAX_CACHE_ENTRIES) {
-      const oldest = cache.keys().next().value;
-      cache.delete(oldest);
-    }
-    return {
-      ok: true,
-      sessionId: id,
-      turnOpen: state.turnOpen === true,
-      turnStartAt: state.turnOpen ? state.turnStartAt : null,
-    };
+    const state = foldTurnState(undefined, live);
+    remember(cache, id, state);
+    return payload(id, state);
   }
 
   const query = readService(ctx, 'sessionQuery');
@@ -73,14 +87,9 @@ export async function readSessionTurnState(ctx, cache, sessionId) {
     return { ok: true, sessionId: id, turnOpen: false, turnStartAt: null };
   }
   try {
-    state = await query.inspectSession(id, (session) => foldTurnState(state, session), AbortSignal.timeout(3000));
-    cache.set(id, state);
-    return {
-      ok: true,
-      sessionId: id,
-      turnOpen: state?.turnOpen === true,
-      turnStartAt: state?.turnOpen ? state.turnStartAt : null,
-    };
+    const state = await query.inspectSession(id, (session) => foldTurnState(undefined, session), AbortSignal.timeout(3000));
+    if (state) remember(cache, id, state);
+    return payload(id, state);
   } catch {
     return { ok: false, sessionId: id, turnOpen: false, turnStartAt: null };
   }

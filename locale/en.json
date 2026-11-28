@@ -1,1 +1,30 @@
-{"meta":{"title":"Rotating status text","description":"Rotates the DSH running-status line through configured per-language phrase lists. Language ids and phrases come entirely from configuration."}}
+{
+  "meta": {
+    "title": "Status phrase rotation",
+    "description": "Rotates DSH running-status lines from configured per-language phrase packs. Language ids and phrases come entirely from config."
+  },
+  "ui": {
+    "nav": "Status phrase rotation",
+    "title": "Status phrase rotation",
+    "hint": "Rotates running-status phrases by turn wait phase. Click Save to apply live.",
+    "enabled": "Enable status phrase rotation",
+    "interval": "Rotation interval (ms)",
+    "t1": "Start -> Progress (sec)",
+    "t2": "Progress -> Long (sec)",
+    "invalidThresholds": "Thresholds must be positive integers with the second greater than the first.",
+    "lang": "Editing language",
+    "addLangPlaceholder": "Add lang ID (e.g. ja)",
+    "addLang": "Add language",
+    "start": "Opening phase (one per line)",
+    "progress": "Cruising phase (one per line)",
+    "long": "Long-haul phase (one per line)",
+    "shake": "Window-shake quips (one per line)",
+    "stageColors": "Stage text colors",
+    "lightColors": "Light theme colors",
+    "darkColors": "Dark theme colors",
+    "save": "Save",
+    "saving": "Saving…",
+    "saved": "Saved",
+    "loading": "Loading…"
+  }
+}

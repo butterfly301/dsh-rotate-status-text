@@ -1,6 +1,8 @@
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
-import { readSessionTurnState } from './host/turn-state.js';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { applyTurnEvent, readSessionTurnState } from './host/turn-state.js';
 
 const localRequire = createRequire(import.meta.url);
 const hostRoot = process.env.DSH_INSTALL_DIR
@@ -11,9 +13,10 @@ const schemastery = hostRoot
 const z = schemastery.default ?? schemastery;
 
 const ROUTE = '/rotate-status-text/turn-state';
+const LOCALE_ROUTE = '/rotate-status-text/locale';
+const LOCALE_ROOT = resolve(fileURLToPath(new URL('./locale/', import.meta.url)));
+const LANG_RE = /^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/u;
 
-// `phrases` is keyed by language id; each language entry can be either the
-// segmented `{ start, progress, long }` object or a legacy flat `string[]`.
 const segmentPhrases = z.object({
   start: z.array(z.string()).default([]),
   progress: z.array(z.string()).default([]),
@@ -56,13 +59,93 @@ function sendJson(req, res, status, payload) {
 }
 
 export function apply(ctx) {
+  const cache = new Map();
+  const offSessionEvent = typeof ctx.on === 'function'
+    ? ctx.on('session/event', (session, event) => {
+      const id = session?.id;
+      if (typeof id !== 'string' || id === '') return;
+      let state = cache.get(id);
+      if (!state) {
+        state = { turnOpen: false, turnStartAt: null };
+        cache.set(id, state);
+      }
+      applyTurnEvent(state, event);
+      if (cache.size > 128) {
+        const oldest = cache.keys().next().value;
+        cache.delete(oldest);
+      }
+    })
+    : undefined;
+  ctx.effect(() => () => { try { offSessionEvent?.(); } catch {} }, 'dsh-rotate-status-text: session events');
+
   ctx.inject(['settings'], scope => scope.effect(
     () => scope.settings.configure({ auto: false }, ctx.fiber),
   ));
 
   ctx.inject(['webServer'], scope => scope.effect(() => {
-    const cache = new Map();
-    return scope.webServer.register({
+    const unregisterLocale = scope.webServer.register({
+      kind: 'prefix',
+      path: LOCALE_ROUTE,
+      handler: async (req, res) => {
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+          res.writeHead(405, { 'x-content-type-options': 'nosniff' });
+          res.end();
+          return;
+        }
+        let url;
+        try {
+          url = new URL(req.url ?? LOCALE_ROUTE, 'http://dsh.local');
+        } catch {
+          res.writeHead(400, { 'x-content-type-options': 'nosniff' });
+          res.end();
+          return;
+        }
+        if (!url.pathname.startsWith(`${LOCALE_ROUTE}/`) || !url.pathname.endsWith('.json')) {
+          res.writeHead(404, { 'x-content-type-options': 'nosniff' });
+          res.end();
+          return;
+        }
+        let lang;
+        try {
+          lang = decodeURIComponent(url.pathname.slice(LOCALE_ROUTE.length + 1, -5));
+        } catch {
+          res.writeHead(400, { 'x-content-type-options': 'nosniff' });
+          res.end();
+          return;
+        }
+        if (!LANG_RE.test(lang)) {
+          res.writeHead(400, { 'x-content-type-options': 'nosniff' });
+          res.end();
+          return;
+        }
+        const candidates = [lang.toLowerCase(), lang.toLowerCase().split('-')[0], 'en'].filter((id, index, all) => all.indexOf(id) === index);
+        for (const id of candidates) {
+          try {
+            const raw = await readFile(join(LOCALE_ROOT, `${id}.json`), 'utf8');
+            const data = JSON.parse(raw);
+            const payload = { lang: id, ui: data && typeof data.ui === 'object' ? data.ui : {} };
+            const body = Buffer.from(JSON.stringify(payload));
+            res.writeHead(200, {
+              'x-content-type-options': 'nosniff',
+              'cache-control': 'public, max-age=3600',
+              'content-length': String(body.byteLength),
+              'content-type': 'application/json; charset=utf-8',
+            });
+            res.end(req.method === 'HEAD' ? undefined : body);
+            return;
+          } catch (error) {
+            if (error?.code !== 'ENOENT') {
+              res.writeHead(500, { 'x-content-type-options': 'nosniff' });
+              res.end();
+              return;
+            }
+          }
+        }
+        res.writeHead(404, { 'x-content-type-options': 'nosniff' });
+        res.end();
+      },
+    });
+    const unregister = scope.webServer.register({
       kind: 'prefix',
       path: ROUTE,
       handler: async (req, res) => {
@@ -89,5 +172,9 @@ export function apply(ctx) {
         sendJson(req, res, 200, payload);
       },
     });
+    return () => {
+      try { unregisterLocale?.(); } catch {}
+      unregister();
+    };
   }, 'dsh-rotate-status-text: turn-state route'));
 }

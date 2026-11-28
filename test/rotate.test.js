@@ -187,7 +187,7 @@ test('foldTurnState tracks latest turn/start and clears on turn/end', () => {
   assert.equal(state.turnStartAt, 5000);
 });
 
-test('segmented status phrases select start / progress / long by elapsed time and delay cross-segment switch until next bucket', async () => {
+test('segmented status phrases delay natural switches until the next bucket and apply threshold edits immediately', async () => {
   const startAt = 1_000_000;
   const harness = createHarness({
     initialTime: startAt + 5_000,
@@ -197,7 +197,7 @@ test('segmented status phrases select start / progress / long by elapsed time an
     },
     pack: {
       intervalMs: 10_000,
-      thresholds: [30, 60],
+      thresholds: [8, 20],
       phrases: {
         'zh-pirate': {
           start: ['起步句'],
@@ -211,14 +211,17 @@ test('segmented status phrases select start / progress / long by elapsed time an
   await harness.selectSession('s1');
   await Promise.resolve();
 
-  // 5s elapsed -> start segment (bucket at 1_005_000 = 100)
   assert.equal(harness.locale.translate('chat', 'chat.deepDiving'), '起步句');
 
-  // Jump to 31s (bucket 103) vs still in same bucket first:
-  // Advance within same bucket 100 -> 1_009_000, and test custom threshold [8, 20]
+  harness.setTime(startAt + 9_000);
+  assert.equal(harness.locale.translate('chat', 'chat.deepDiving'), '起步句');
+
+  harness.setTime(startAt + 11_000);
+  assert.equal(harness.locale.translate('chat', 'chat.deepDiving'), '推进句');
+
   harness.setPack({
     intervalMs: 10_000,
-    thresholds: [8, 20],
+    thresholds: [5, 10],
     phrases: {
       'zh-pirate': {
         start: ['起步句'],
@@ -227,14 +230,8 @@ test('segmented status phrases select start / progress / long by elapsed time an
       },
     },
   });
-  harness.setTime(startAt + 9_000); // elapsed = 9s >= 8s, STILL bucket 100!
-  assert.equal(harness.locale.translate('chat', 'chat.deepDiving'), '起步句');
+  assert.equal(harness.locale.translate('chat', 'chat.deepDiving'), '漫长句');
 
-  // Next rotation window (bucket 101) -> now switches to progress
-  harness.setTime(startAt + 11_000);
-  assert.equal(harness.locale.translate('chat', 'chat.deepDiving'), '推进句');
-
-  // Switch to session s2 (already 96s elapsed -> long)
   await harness.selectSession('s2');
   assert.equal(harness.locale.translate('chat', 'chat.deepDiving'), '漫长句');
 
@@ -448,6 +445,7 @@ test('out-of-order translate wrapper disposal leaves outer wrapper intact and fa
   const locale = {
     getSnapshot: () => ({ active: 'ko' }),
     translate: (_ns, key) => `NATIVE:${key}`,
+    bind: (ns) => (key) => `${ns}:${key}`,
   };
   const registered = [];
   let slotDisposed = 0;
@@ -502,6 +500,7 @@ test('out-of-order translate wrapper disposal leaves outer wrapper intact and fa
   assert.equal(registered.length, 1);
   assert.equal(scopeEffectCalls, 1);
   assert.equal(registered[0].meta.id, 'dsh-rotate-status-text');
+  assert.equal(registered[0].meta.label(), 'dsh-rotate-status-text:nav');
   assert.equal(locale.translate('chat', 'chat.deepDiving'), 'EN');
 
   // Simulate another plugin wrapping locale.translate after dsh-rotate-status-text

@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({
       : null;
     const NS = 'dsh-rotate-status-text';
     const TURN_STATE_ROUTE = '/rotate-status-text/turn-state';
+    const LOCALE_ROUTE = '/rotate-status-text/locale';
     const OVERRIDE_EVENT = 'dsh:status-text:override';
     const SHAKE_EVENT = 'dsh:window-shake';
     const DEFAULT_THRESHOLDS = [30, 60];
@@ -26,10 +27,6 @@ window.__ModuleLoader__.load({
       }),
     });
 
-    // The keys the chat running-status line is rendered through. The framework
-    // builds `t` with ctx.locale.bind(ns), and that bound function resolves
-    // `this.translate(ns, key, params)` at call time — so shadowing translate on
-    // the locale service instance rewrites exactly these keys at render time.
     const STATUS_KEYS = [
       'chat.deepDiving',
       'chat.deepDivingFor',
@@ -47,8 +44,6 @@ window.__ModuleLoader__.load({
       return phrase.split(PLACEHOLDER).join(duration);
     }
 
-    // Pick by a wall-clock window so all re-renders within one window show the
-    // same phrase (no flicker), and the phrase advances once per interval.
     function pickIndex(length, intervalMs, now = Date.now()) {
       if (length <= 1) return 0;
       const bucket = Math.floor(now / intervalMs);
@@ -57,11 +52,6 @@ window.__ModuleLoader__.load({
 
     const primary = (lang) => String(lang ?? '').split(/[-_]/)[0].toLowerCase();
 
-    /**
-     * Pick a value from a `{ [langId]: value }` map with no language hardcoded:
-     * exact id, then matching primary BCP-47 subtag, then English (`en` / `en-*`),
-     * then the first entry.
-     */
     function pickLocalized(map, active) {
       if (!map || typeof map !== 'object') return undefined;
       if (active && map[active] !== undefined) return map[active];
@@ -78,7 +68,6 @@ window.__ModuleLoader__.load({
       return Object.values(map)[0];
     }
 
-    /** Read the active language id from the locale service snapshot. */
     function readActive(locale) {
       try {
         const snap = typeof locale.getSnapshot === 'function' ? locale.getSnapshot() : undefined;
@@ -110,7 +99,6 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** Normalize legacy flat arrays and segmented `{ start, progress, long }` packs. */
     function normalizePack(value) {
       if (!value || typeof value !== 'object') return undefined;
       const raw = value.phrases;
@@ -255,6 +243,8 @@ window.__ModuleLoader__.load({
       const overrides = new Map();
       let lastStatusSeenAt = 0;
       let pollTimer = 0;
+      let disposed = false;
+      let activeFetchController = null;
 
       function sessionKey(sessionId = activeSessionId) {
         return sessionId || '__default__';
@@ -301,27 +291,23 @@ window.__ModuleLoader__.load({
       function pickActiveOverride(sessionId, activeLang, intervalMs, now = Date.now()) {
         purgeExpiredOverrides(now);
         const bucket = Math.floor(now / intervalMs);
-        let winner = null;
-        for (const item of overrides.values()) {
-          if (item.sessionId !== '*' && item.sessionId !== sessionId) continue;
-          if (item.interleaveEvery > 0 && ((bucket % item.interleaveEvery) + item.interleaveEvery) % item.interleaveEvery === 0) {
+        const candidates = [...overrides.values()]
+          .filter((item) => item.sessionId === '*' || item.sessionId === sessionId)
+          .filter((item) => item.interleaveEvery <= 0 || ((bucket % item.interleaveEvery) + item.interleaveEvery) % item.interleaveEvery !== 0)
+          .sort((left, right) => right.priority - left.priority || right.updatedAt - left.updatedAt);
+        for (const item of candidates) {
+          let resolved = item.text;
+          if (resolved && typeof resolved === 'object' && !Array.isArray(resolved)) {
+            resolved = pickLocalized(resolved, activeLang);
+          }
+          if (Array.isArray(resolved)) {
+            const list = filterStrings(resolved);
+            if (list.length) return list[pickIndex(list.length, intervalMs, now)];
             continue;
           }
-          if (!winner || item.priority > winner.priority || (item.priority === winner.priority && item.updatedAt > winner.updatedAt)) {
-            winner = item;
-          }
+          if (typeof resolved === 'string' && resolved.length > 0) return resolved;
         }
-        if (!winner) return undefined;
-        let resolved = winner.text;
-        if (resolved && typeof resolved === 'object' && !Array.isArray(resolved)) {
-          resolved = pickLocalized(resolved, activeLang);
-        }
-        if (Array.isArray(resolved)) {
-          const list = filterStrings(resolved);
-          if (!list.length) return undefined;
-          return list[pickIndex(list.length, intervalMs, now)];
-        }
-        return typeof resolved === 'string' && resolved.length > 0 ? resolved : undefined;
+        return undefined;
       }
 
       function updateHostTurnState(sessionId, payload, now = Date.now(), requestStartedAt = now) {
@@ -381,18 +367,19 @@ window.__ModuleLoader__.load({
         const targetSegment = segmentForElapsed(elapsedSec, pack.thresholds);
         const bucket = Math.floor(now / pack.intervalMs);
 
+        const thresholdsKey = pack.thresholds.join(',');
         let view = displayState.get(key);
         const upgradedFromProvisional = Boolean(view && view.wasProvisional && !turnEntry.provisional);
-        if (!view || view.turnStartAt !== turnStartAt || upgradedFromProvisional) {
+        if (!view || view.turnStartAt !== turnStartAt || upgradedFromProvisional || view.thresholdsKey !== thresholdsKey) {
           view = {
             turnStartAt,
             lastBucket: bucket,
             lockedSegment: targetSegment,
             wasProvisional: Boolean(turnEntry.provisional),
+            thresholdsKey,
           };
           displayState.set(key, view);
         } else if (bucket !== view.lastBucket) {
-          // Cross-segment transitions wait for the next rotation bucket to prevent flicker.
           view.lastBucket = bucket;
           view.lockedSegment = targetSegment;
         }
@@ -410,14 +397,23 @@ window.__ModuleLoader__.load({
       }
 
       function fetchTurnState(sessionId) {
-        if (!sessionId || typeof fetch !== 'function') return;
+        if (disposed || !sessionId || typeof fetch !== 'function') return;
+        activeFetchController?.abort();
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        activeFetchController = controller;
         const startedAt = Date.now();
-        fetch(`${TURN_STATE_ROUTE}?sessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' })
+        fetch(`${TURN_STATE_ROUTE}?sessionId=${encodeURIComponent(sessionId)}`, {
+          cache: 'no-store',
+          ...(controller ? { signal: controller.signal } : {}),
+        })
           .then((res) => (res && res.ok ? res.json() : null))
           .then((payload) => {
-            if (payload) updateHostTurnState(sessionId, payload, Date.now(), startedAt);
+            if (!disposed && payload) updateHostTurnState(sessionId, payload, Date.now(), startedAt);
           })
-          .catch(() => {});
+          .catch(() => {})
+          .finally(() => {
+            if (activeFetchController === controller) activeFetchController = null;
+          });
       }
 
       function setActiveSessionId(nextId) {
@@ -430,6 +426,7 @@ window.__ModuleLoader__.load({
       function schedulePoll() {
         if (pollTimer !== 0) return;
         pollTimer = setInterval(() => {
+          if (typeof document !== 'undefined' && document.hidden) return;
           if (!activeSessionId) return;
           const now = Date.now();
           const entry = turnCache.get(activeSessionId);
@@ -447,6 +444,9 @@ window.__ModuleLoader__.load({
       }
 
       function dispose() {
+        disposed = true;
+        activeFetchController?.abort();
+        activeFetchController = null;
         if (pollTimer !== 0) {
           clearInterval(pollTimer);
           pollTimer = 0;
@@ -456,6 +456,10 @@ window.__ModuleLoader__.load({
         overrides.clear();
       }
 
+      function refreshActiveTurnState() {
+        if (activeSessionId) fetchTurnState(activeSessionId);
+      }
+
       return {
         setActiveSessionId,
         setOverride,
@@ -463,17 +467,13 @@ window.__ModuleLoader__.load({
         selectEntry,
         selectPhrase,
         schedulePoll,
+        refreshActiveTurnState,
         isActiveRunning,
         dispose,
         get activeSessionId() { return activeSessionId; },
       };
     }
 
-    /**
-     * Shadow the locale service's translate method. Returns a restore function
-     * that puts the original descriptor back — called from the effect cleanup
-     * so disabling/unloading leaves no trace.
-     */
     function installOverride(locale, getPack, tracker) {
       if (!locale || typeof locale.translate !== 'function') return () => {};
 
@@ -522,7 +522,8 @@ window.__ModuleLoader__.load({
       return function restore() {
         if (!active) return;
         active = false;
-        if (holder.translate === patched) {
+        const descriptor = Object.getOwnPropertyDescriptor(holder, 'translate');
+        if (descriptor && descriptor.value === patched) {
           if (own === undefined) delete holder.translate;
           else Object.defineProperty(holder, 'translate', own);
         }
@@ -534,62 +535,11 @@ window.__ModuleLoader__.load({
         const byId = sessions?.list?.getSnapshot?.()?.byId;
         if (!byId || typeof byId !== 'object') return null;
         const selected = Object.values(byId).filter((s) => s && s.retainedBy?.mainView > 0);
-        return selected.length === 1 ? selected[0].id : null;
+        return selected[0]?.id ?? null;
       } catch {
         return null;
       }
     }
-
-    const ROTATE_COPY = {
-      zh: {
-        nav: '状态短句轮换',
-        title: '状态短句轮换',
-        hint: '按等待时长分段轮换运行状态文案；修改后点保存立即生效。',
-        enabled: '启用状态短句轮换',
-        interval: '轮换间隔（毫秒）',
-        t1: '起步切推进（秒）',
-        t2: '推进切漫长（秒）',
-        invalidThresholds: '分段秒数必须是正整数，且第二边界大于第一边界。',
-        lang: '编辑语种',
-        addLangPlaceholder: '新增语言 ID（如 ja）',
-        addLang: '添加语种',
-        start: '起步阶段（每行一句）',
-        progress: '推进阶段（每行一句）',
-        long: '漫长阶段（每行一句）',
-        shake: '窗口摇晃吐槽（每行一句）',
-        stageColors: '分段状态颜色',
-        lightColors: '浅色主题颜色',
-        darkColors: '深色主题颜色',
-        save: '保存',
-        saving: '保存中…',
-        saved: '已保存',
-        loading: '加载中…',
-      },
-      en: {
-        nav: 'Status phrase rotation',
-        title: 'Status phrase rotation',
-        hint: 'Rotates running-status phrases by turn wait phase. Click Save to apply live.',
-        enabled: 'Enable status phrase rotation',
-        interval: 'Rotation interval (ms)',
-        t1: 'Start -> Progress (sec)',
-        t2: 'Progress -> Long (sec)',
-        invalidThresholds: 'Thresholds must be positive integers with the second greater than the first.',
-        lang: 'Editing language',
-        addLangPlaceholder: 'Add lang ID (e.g. ja)',
-        addLang: 'Add language',
-        start: 'Opening phase (one per line)',
-        progress: 'Cruising phase (one per line)',
-        long: 'Long-haul phase (one per line)',
-        shake: 'Window-shake quips (one per line)',
-        stageColors: 'Stage text colors',
-        lightColors: 'Light theme colors',
-        darkColors: 'Dark theme colors',
-        save: 'Save',
-        saving: 'Saving…',
-        saved: 'Saved',
-        loading: 'Loading…',
-      },
-    };
 
     const ROTATE_CSS = `
 .rs-panel { display: flex; flex-direction: column; gap: 12px; color: var(--dsw-alias-label-primary); font-size: 14px; line-height: 22px; }
@@ -624,14 +574,15 @@ window.__ModuleLoader__.load({
       return String(raw ?? '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     }
 
+    function copyOf(locale) {
+      const bound = locale && typeof locale.bind === 'function' ? locale.bind(NS) : null;
+      if (!bound) return {};
+      return new Proxy({}, { get: (_target, key) => bound(String(key)) });
+    }
+
     function createRotateSettingsComponent(R) {
       const { useState, useEffect, useRef } = R;
       const h = R.createElement;
-
-      function copyOf(locale) {
-        const active = readActive(locale) || '';
-        return primary(active) === 'zh' ? ROTATE_COPY.zh : ROTATE_COPY.en;
-      }
 
       function toEditablePack(rawPack) {
         if (!rawPack || typeof rawPack !== 'object') return null;
@@ -649,6 +600,10 @@ window.__ModuleLoader__.load({
               };
             }
           }
+        }
+        if (norm && norm.phrases[''] && !phrases.en) {
+          const legacy = norm.phrases[''];
+          phrases.en = { start: [...legacy.start], progress: [...legacy.progress], long: [...legacy.long] };
         }
         return {
           intervalMs: norm ? norm.intervalMs : (typeof rawPack.intervalMs === 'number' ? rawPack.intervalMs : 8000),
@@ -935,23 +890,38 @@ window.__ModuleLoader__.load({
     return {
       inject: ['locale', 'configForms'],
       apply(ctx) {
+        const dicts = new Set();
+        const loadUi = () => {
+          if (typeof fetch !== 'function') return;
+          const lang = primary(readActive(ctx.locale)) || 'en';
+          if (dicts.has(lang)) return;
+          dicts.add(lang);
+          fetch(`${LOCALE_ROUTE}/${encodeURIComponent(lang)}.json`, { cache: 'no-store' })
+            .then((res) => (res && res.ok ? res.json() : null))
+            .then((payload) => {
+              if (!payload || typeof payload.ui !== 'object' || !payload.ui) {
+                dicts.delete(lang);
+                return;
+              }
+              try { ctx.locale.register(NS, payload.lang || lang, payload.ui); } catch {}
+            })
+            .catch(() => { dicts.delete(lang); });
+        };
+        ctx.effect(() => {
+          loadUi();
+          const unsub = typeof ctx.locale.subscribe === 'function' ? ctx.locale.subscribe(loadUi) : undefined;
+          return () => { try { unsub?.(); } catch {} };
+        }, 'dsh-rotate-status-text: ui locale');
         let stopSettingsUi;
         if (React && typeof ctx.inject === 'function') {
           const Panel = createRotateSettingsComponent(React);
-          stopSettingsUi = ctx.inject(['slots', 'remote', 'remote.settings'], (scope) => {
+          stopSettingsUi = ctx.inject(['slots'], (scope) => {
             const mount = () => {
               const form = ctx.configForms.get(NS);
-              const getLabel = () => (primary(readActive(ctx.locale)) === 'zh' ? ROTATE_COPY.zh.nav : ROTATE_COPY.en.nav);
+              const getLabel = () => copyOf(ctx.locale).nav;
               const savePack = async (packValue, revision) => {
-                const settingsRemote = scope.remote?.settings;
-                if (!settingsRemote) throw new Error('settingsRemoteUnavailable');
-                const res = await settingsRemote.mutate(NS, [{ op: 'set', path: ['pack'], value: packValue }], revision);
-                if (res.ok) {
-                  ctx.configForms.describe?.().acceptView?.(res.value);
-                } else {
-                  await ctx.configForms.describe?.().load?.();
-                  throw new Error(res.error?.message || res.error?.code || 'persistFailed');
-                }
+                const accepted = await form.mutate([{ op: 'set', path: ['pack'], value: packValue }], revision);
+                if (!accepted) throw new Error('persistFailed');
               };
               const regStop = scope.slots.inject('settings.section', () => scope.slots.register(
                 { name: 'settings.section', id: NS, order: 90, label: getLabel },
@@ -995,8 +965,6 @@ window.__ModuleLoader__.load({
             cleanupStageStyles = pack ? installStageStyles(pack.stageColors) : () => {};
             if (pack && !restoreOverride) {
               try {
-                // getPack reads the live ref, so translate always sees the newest
-                // config and active language without reinstalling the wrapper.
                 restoreOverride = installOverride(ctx.locale, () => currentPack, tracker);
               } catch (error) {
                 currentPack = undefined;
@@ -1050,12 +1018,22 @@ window.__ModuleLoader__.load({
 
           const unsubscribe = form.subscribe(sync);
           sync();
+          const onVisibility = () => {
+            if (typeof document === 'undefined' || document.hidden) return;
+            tracker.refreshActiveTurnState();
+          };
+          if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+            window.addEventListener('visibilitychange', onVisibility);
+          }
           return () => {
             if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
               window.removeEventListener(OVERRIDE_EVENT, onOverrideEvent);
               window.removeEventListener(SHAKE_EVENT, onShakeEvent);
             }
             try { stopSessions?.(); } catch {}
+            if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+              window.removeEventListener('visibilitychange', onVisibility);
+            }
             try { cleanupStageStyles(); } catch {}
             try { unsubscribe(); } finally {
               tracker.dispose();
